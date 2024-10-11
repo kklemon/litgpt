@@ -59,6 +59,7 @@ def setup(
     lora_projection: bool = False,
     lora_mlp: bool = False,
     lora_head: bool = False,
+    lora_diff_attn: bool = True,
     data: Optional[DataModule] = None,
     train: TrainArgs = TrainArgs(
         save_interval=1000,
@@ -120,6 +121,7 @@ def setup(
         lora_projection=lora_projection,
         lora_mlp=lora_mlp,
         lora_head=lora_head,
+        lora_diff_attn=lora_diff_attn
     )
 
     precision = precision or get_default_supported_precision(training=True)

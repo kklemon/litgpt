@@ -494,6 +494,7 @@ class Config(BaseConfig):
     lora_projection: bool = False
     lora_mlp: bool = False
     lora_head: bool = False
+    lora_diff_attn: bool = False
 
     @property
     def mlp_class(self) -> Type:
@@ -631,6 +632,27 @@ class CausalSelfAttention(BaseCausalSelfAttention):
             config.sliding_window_size is not None and
             block_idx % config.sliding_window_layer_placing == 0
         )
+        
+        if config.differential_attention or config.lora_diff_attn:
+            diff_shape = (config.n_head + config.n_query_groups) * config.head_size
+            
+            # Shape as the normal attention projection but without the values
+            if config.lora_diff_attn:
+                self.diff_attn = LoRALinear(
+                    config.n_embd,
+                    diff_shape,
+                    bias=config.bias,
+                    r=(config.lora_r if config.lora_diff_attn else 0),
+                    lora_alpha=config.lora_alpha,
+                    lora_dropout=config.lora_dropout,
+                )
+            else:
+                self.diff_attn = nn.Linear(config.n_embd, diff_shape)
+            
+            self.diff_lambda = nn.Parameter(torch.full((config.n_embd,), 0.8))
+        else:
+            self.diff_attn = None
+            self.diff_lambda = None
 
         self.config = config
 

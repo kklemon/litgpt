@@ -67,6 +67,7 @@ class Config:
     n_expert_per_token: int = 0
     attention_logit_softcapping: Optional[float] = None
     final_logit_softcapping: Optional[float] = None
+    differential_attention: bool = False
 
     def __post_init__(self):
         if not self.name:

@@ -254,7 +254,17 @@ class CausalSelfAttention(nn.Module):
             config.sliding_window_size is not None and
             block_idx % config.sliding_window_layer_placing == 0
         )
-
+        
+        if config.differential_attention:
+            diff_shape = (config.n_head + config.n_query_groups) * config.head_size
+            
+            # Shape as the normal attention projection but without the values
+            self.diff_attn = nn.Linear(config.n_embd, diff_shape)
+            self.diff_lambda = nn.Parameter(torch.zeros(1))
+        else:
+            self.diff_attn = None
+            self.diff_lambda = None
+        
         self.config = config
 
     def forward(
@@ -275,9 +285,38 @@ class CausalSelfAttention(nn.Module):
         qkv = qkv.view(B, T, self.config.n_query_groups, total_qkv, self.config.head_size)
         qkv = qkv.permute(0, 2, 3, 1, 4)  # (B, n_query_groups, total_qkv, T, hs)
 
-        # split batched computation into three
         q, k, v = qkv.split((q_per_kv, 1, 1), dim=2)
+        
+        y = self.process_qkv_group(q, k, v, cos, sin, mask, input_pos)
+            
+        if self.diff_attn is not None:
+            total_diff_qkv = q_per_kv + 1
+            
+            diff_qkv = self.diff_attn(x)
+            diff_qkv = diff_qkv.view(B, T, self.config.n_query_groups, total_diff_qkv, self.config.head_size)
+            diff_qkv = diff_qkv.permute(0, 2, 3, 1, 4)  # (B, n_query_groups, total_diff_qkv, T, hs)
+            
+            q, k = diff_qkv.split((q_per_kv, 1), dim=2)
+            
+            y -= self.diff_lambda * self.process_qkv_group(q, k, v, cos, sin, mask, input_pos)
 
+        # output projection
+        return self.proj(y)
+    
+    def process_qkv_group(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        input_pos: Optional[torch.Tensor] = None
+    ):
+        B, _, _, T, C = q.size()
+        
+        q_per_kv = self.config.n_head // self.config.n_query_groups
+        
         # maybe repeat k and v if for the non multi-head attention cases
         # training: flash attention requires it
         # inference: multi-query would require a full kv cache so avoid it to limit its memory usage
@@ -319,10 +358,9 @@ class CausalSelfAttention(nn.Module):
 
         y = self.scaled_dot_product_attention(q, k, v, mask)
 
-        y = y.reshape(B, T, self.config.head_size * self.config.n_head)  # re-assemble all head outputs side by side
-
-        # output projection
-        return self.proj(y)
+        y = y.reshape(B, T, self.config.head_size * self.config.n_head)
+        
+        return y
 
     def scaled_dot_product_attention(
         self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: Optional[torch.Tensor] = None
